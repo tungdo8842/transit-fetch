@@ -17,18 +17,41 @@ class Bus_Route():
                 f"route_type: {self.route_type}, route_color: {self.route_color}, route_text_color: {self.route_text_color}") 
 
 
+class Bus_Stop():
+    def __init__(self, stop_id, stop_name, stop_lat, stop_lon, wheelchair_boarding, stop_code):
+        self.stop_id = stop_id
+        self.stop_name = stop_name
+        self.stop_lat = stop_lat
+        self.stop_lon = stop_lon
+        self.wheelchair_boarding = wheelchair_boarding
+        self.stop_code = stop_code
+
+    def __str__(self):
+        return (f"stop_id: {self.stop_id}, stop_name: {self.stop_name}, stop_lat: {self.stop_lat}, " +
+                f"stop_lon: {self.stop_lon}, wheelchair_boarding: {self.wheelchair_boarding}, stop_code: {self.stop_code}")
+
+
 # initialization
 # app = FastAPI()
 
-# fetch routh from static routes.txt
-bus_routes = []
+# read static data
+# keys are in str, not int
+bus_routes = {}
+bus_stops = {}
+
 with open("./static_data/routes.txt", encoding="utf-8-sig") as file:
     reader = list(csv.DictReader(file))
     for route in reader:
         new_bus_route = Bus_Route(route["route_id"], route["route_short_name"], route["route_long_name"], \
                 route["route_type"], route["route_color"], route["route_text_color"])
-        bus_routes.append(new_bus_route)
+        bus_routes[new_bus_route.route_id] = new_bus_route
 
+with open("./static_data/stops.txt", encoding="utf-8-sig") as file:
+    reader = list(csv.DictReader(file))
+    for stop in reader:
+        new_bus_stop = Bus_Stop(stop["stop_id"], stop["stop_name"], stop["stop_lat"], stop["stop_lon"], \
+                stop["wheelchair_boarding"], stop["stop_code"])
+        bus_stops[new_bus_stop.stop_id] = new_bus_stop
 
 
 feed = gtfs_realtime_pb2.FeedMessage()
@@ -36,16 +59,21 @@ response = requests.get("https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operat
 
 feed.ParseFromString(response.content)
 
-# if not feed.entity:
-#     print("Feed contained no entities")
-# else:
-for entity in feed.entity:
-    if entity.HasField("trip_update"):
-        trip = entity.trip_update.trip
-        for route in bus_routes:
-            if route.route_id == trip.route_id:
-                print(f"Trip info: {route.route_short_name}: {route.route_long_name}, " +
-                        f"Start time: {trip.start_time}")
+def get_bus_at_stop(feed, stop_id:str):
+    depatures_list = []
+    for entity in feed.entity:
+        if entity.HasField("trip_update") and entity.trip_update.stop_time_update: # length != 0
+                for update in entity.trip_update.stop_time_update:
+                    if update.stop_id == stop_id:
+                        depatures_list.append(update)
+    return depatures_list
+
+# TODO: parse all stops for all bus depatures
+
+uvic_bay_c = "102417"
+uvic_bay_c_depatures = get_bus_at_stop(feed, uvic_bay_c)
+
+print(uvic_bay_c_depatures)
 
 
 # @app.get("/")
