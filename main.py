@@ -1,7 +1,9 @@
 from google.transit import gtfs_realtime_pb2
+from google.protobuf.json_format import MessageToDict
 import requests
 import csv
-# from fastapi import FastAPI
+from collections import defaultdict
+from fastapi import FastAPI
 
 class Bus_Route():
     def __init__(self, route_id, route_short_name, route_long_name, route_type, route_color, route_text_color):
@@ -32,7 +34,7 @@ class Bus_Stop():
 
 
 # initialization
-# app = FastAPI()
+app = FastAPI()
 
 # read static data
 # keys are in str, not int
@@ -57,25 +59,46 @@ with open("./static_data/stops.txt", encoding="utf-8-sig") as file:
 feed = gtfs_realtime_pb2.FeedMessage()
 response = requests.get("https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48")
 
+trips_per_stop = defaultdict(list)
+
 feed.ParseFromString(response.content)
 
-def get_bus_at_stop(feed, stop_id:str):
-    depatures_list = []
+# def get_bus_at_stop(feed, stop_id:str):
+#     depatures_list = []
+#     for entity in feed.entity:
+#         if entity.HasField("trip_update") and entity.trip_update.stop_time_update: # length != 0
+#             for update in entity.trip_update.stop_time_update:
+#                 if update.stop_id == stop_id:
+#                     depatures_list.append(update)
+#     return depatures_list
+
+# Start converting dictionary object to message here
+def get_trips_at_stops(feed, trips_per_stop):
+    """sort all trips into a stop dictionary"""
     for entity in feed.entity:
         if entity.HasField("trip_update") and entity.trip_update.stop_time_update: # length != 0
-                for update in entity.trip_update.stop_time_update:
-                    if update.stop_id == stop_id:
-                        depatures_list.append(update)
-    return depatures_list
+            for update in entity.trip_update.stop_time_update:
+                trips_per_stop[update.stop_id].append(MessageToDict(update))
 
-# TODO: parse all stops for all bus depatures
+# TODO: complete the list
+# A:9,4; B:14; C:15; M:39; R:26
+uvic_bay_list = {"A": "101076", "B": "102416", "C": "102417", "M": "100741", "R": "100904"} # incomplete for now
 
-uvic_bay_c = "102417"
-uvic_bay_c_depatures = get_bus_at_stop(feed, uvic_bay_c)
+get_trips_at_stops(feed, trips_per_stop)
+# print(trips_per_stop)
+uvic_trips = []
 
-print(uvic_bay_c_depatures)
+print("Uvic Bay C stop data:")
+for stop_name in uvic_bay_list:
+    uvic_trips.extend(trips_per_stop[uvic_bay_list[stop_name]])
+
+# print(uvic_trips)
 
 
 # @app.get("/")
 # async def root():
 #     return {"message": ""}
+
+@app.get("/bus/uvic_depatures")
+async def uvic_depatures():
+    return uvic_trips
