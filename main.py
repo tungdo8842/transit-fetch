@@ -1,28 +1,15 @@
 from google.transit import gtfs_realtime_pb2
-from google.protobuf.json_format import MessageToDict
 import requests
-import csv, json
+import csv
 from collections import defaultdict
+from contextlib import asynccontextmanager
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 
-app = FastAPI()
 
-# CORS setup
-origins = [
-    "http://localhost",
-    "http://localhost:5173",
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# Data classes
 class BusRoute():
     def __init__(self, route_id, route_short_name, route_long_name, route_type, route_color, route_text_color):
         self.route_id = route_id
@@ -43,6 +30,11 @@ class BusStop():
         self.stop_code = stop_code
 
 
+class ProgramData():
+    def __init__(self):
+        pass
+
+
 class DepartureResponse():
     def __init__(self, stop_id, stop_name, route_id, route_short_name, route_long_name, route_color, time):
         self.stop_id = stop_id
@@ -53,7 +45,6 @@ class DepartureResponse():
         self.route_color = route_color
         self.time = time
 
-# initialization
 
 # read static data
 # keys are in str, not int
@@ -75,46 +66,83 @@ with open("./static_data/stops.txt", encoding="utf-8-sig") as file:
         bus_stops[new_bus_stop.stop_id] = new_bus_stop
 
 
-feed = gtfs_realtime_pb2.FeedMessage()
-response = requests.get("https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48")
-
-trips_per_stop = defaultdict(list)
-
-feed.ParseFromString(response.content)
-
-# Start converting dictionary object to message here
-def get_trips_at_stops(feed, trips_per_stop):
+# Feed data processing
+def get_trips_at_stops(feed):
     """sort all trips into a stop dictionary"""
+    trips_per_stop = defaultdict(list)
+
     for entity in feed.entity:
         if entity.HasField("trip_update") and entity.trip_update.stop_time_update: # length != 0
             route_id = entity.trip_update.trip.route_id
+
             for update in entity.trip_update.stop_time_update:
                 # filter out bad timestamp
                 if update.departure.time == 0:
                     continue
                 stop_id = update.stop_id
+
                 trip = DepartureResponse(stop_id=stop_id, stop_name=bus_stops[stop_id].stop_name,
                                          route_id=route_id, route_short_name=bus_routes[route_id].route_short_name,
                                          route_long_name=bus_routes[route_id].route_long_name,
                                          route_color=bus_routes[route_id].route_color, time=update.departure.time)
-                # add dictionary of trip class
+                # use dictionary of DepartureResponse class for api response
                 trips_per_stop[update.stop_id].append(trip.__dict__)
 
+    return trips_per_stop
 
-# TODO: complete the list
-# A:9,4; B:14; C:15; M:39; R:26
-uvic_bay_list = {"A": "101076", "B": "102416", "C": "102417", "M": "100741", "R": "100904"} # incomplete for now
 
-get_trips_at_stops(feed, trips_per_stop)
-# print(trips_per_stop)
-uvic_trips = []
+def get_uvic_bus(uvic_bay_list, trips_per_stop):
+    uvic_trips = []
+    for stop_name in uvic_bay_list:
+        uvic_trips.extend(trips_per_stop[uvic_bay_list[stop_name]])
 
-print("Uvic Bay C stop data:")
-for stop_name in uvic_bay_list:
-    uvic_trips.extend(trips_per_stop[uvic_bay_list[stop_name]])
+    uvic_trips.sort(key=lambda d: d["time"])
 
+    return uvic_trips
+
+
+# Periodically updating data
+async def update_feed_data(app):
+    while True:
+        # GTFS Feed requests
+        response = requests.get("https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48")
+        app.state.feed.ParseFromString(response.content)
+
+        # put all trips into their associated stop
+        app.state.trips_per_stop = get_trips_at_stops(app.state.feed)
+        # # A:4/9, B:14, C:15, G:7, M:39, R:26 (incomplete list)
+        app.state.uvic_bay_list = {"A": "101076", "B": "102416", "C": "102417", "G": "100405","M": "100741", "R": "100904"}
+        app.state.uvic_trips = get_uvic_bus(app.state.uvic_bay_list, app.state.trips_per_stop)
+        await asyncio.sleep(60)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    app.state.feed = gtfs_realtime_pb2.FeedMessage()
+    asyncio.create_task(update_feed_data(app))
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+# CORS setup
+origins = [
+    "http://localhost",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://tungdo.dev",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/bus/uvic-departures")
 async def uvic_departures():
-    return uvic_trips
+    return app.state.uvic_trips
