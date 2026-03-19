@@ -8,7 +8,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 
-
 # Data classes
 class BusRoute():
     def __init__(self, route_id, route_short_name, route_long_name, route_type, route_color, route_text_color):
@@ -30,18 +29,24 @@ class BusStop():
         self.stop_code = stop_code
 
 
-class ProgramData():
-    def __init__(self):
-        pass
+class BusTrip():
+    def __init__(self, route_id, service_id, trip_id, trip_headsign, shape_id, block_id, direction_id):
+        self.route_id = route_id
+        self.service_id = service_id
+        self.trip_id = trip_id
+        self.trip_headsign = trip_headsign
+        self.shape_id = shape_id
+        self.block_id = block_id
+        self.direction_id = direction_id
 
 
 class DepartureResponse():
-    def __init__(self, stop_id, stop_name, route_id, route_short_name, route_long_name, route_color, time):
+    def __init__(self, stop_id, stop_name, route_id, route_short_name, trip_headsign, route_color, time):
         self.stop_id = stop_id
         self.stop_name = stop_name
         self.route_id = route_id
         self.route_short_name = route_short_name
-        self.route_long_name = route_long_name
+        self.trip_headsign = trip_headsign
         self.route_color = route_color
         self.time = time
 
@@ -50,6 +55,7 @@ class DepartureResponse():
 # keys are in str, not int
 bus_routes = {}
 bus_stops = {}
+bus_trips = {}
 
 with open("./static_data/routes.txt", encoding="utf-8-sig") as file:
     reader = list(csv.DictReader(file))
@@ -65,6 +71,12 @@ with open("./static_data/stops.txt", encoding="utf-8-sig") as file:
                 stop["wheelchair_boarding"], stop["stop_code"])
         bus_stops[new_bus_stop.stop_id] = new_bus_stop
 
+with open("./static_data/trips.txt", encoding="utf-8-sig") as file:
+    reader = list(csv.DictReader(file))
+    for trip in reader:
+        new_bus_trip = BusTrip(trip["route_id"], trip["service_id"], trip["trip_id"], trip["trip_headsign"], \
+                trip["shape_id"], trip["block_id"], trip["direction_id"])
+        bus_trips[new_bus_trip.trip_id] = new_bus_trip
 
 # Feed data processing
 def get_trips_at_stops(feed):
@@ -74,6 +86,7 @@ def get_trips_at_stops(feed):
     for entity in feed.entity:
         if entity.HasField("trip_update") and entity.trip_update.stop_time_update: # length != 0
             route_id = entity.trip_update.trip.route_id
+            trip_id = entity.trip_update.trip.trip_id
 
             for update in entity.trip_update.stop_time_update:
                 # filter out bad timestamp
@@ -83,7 +96,7 @@ def get_trips_at_stops(feed):
 
                 trip = DepartureResponse(stop_id=stop_id, stop_name=bus_stops[stop_id].stop_name,
                                          route_id=route_id, route_short_name=bus_routes[route_id].route_short_name,
-                                         route_long_name=bus_routes[route_id].route_long_name,
+                                         trip_headsign=bus_trips[trip_id].trip_headsign,
                                          route_color=bus_routes[route_id].route_color, time=update.departure.time)
                 # use dictionary of DepartureResponse class for api response
                 trips_per_stop[update.stop_id].append(trip.__dict__)
@@ -105,8 +118,12 @@ def get_uvic_bus(uvic_bay_list, trips_per_stop):
 async def update_feed_data(app):
     while True:
         # GTFS Feed requests
-        response = requests.get("https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48")
-        app.state.feed.ParseFromString(response.content)
+        try:
+            response = requests.get("https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48")
+            app.state.feed.ParseFromString(response.content)
+        except:
+            await asyncio.sleep(10)
+            continue
 
         # put all trips into their associated stop
         app.state.trips_per_stop = get_trips_at_stops(app.state.feed)
