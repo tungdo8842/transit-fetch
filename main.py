@@ -94,12 +94,16 @@ def get_trips_at_stops(feed):
                     continue
                 stop_id = update.stop_id
 
-                trip = DepartureResponse(stop_id=stop_id, stop_name=bus_stops[stop_id].stop_name,
-                                         route_id=route_id, route_short_name=bus_routes[route_id].route_short_name,
-                                         trip_headsign=bus_trips[trip_id].trip_headsign,
-                                         route_color=bus_routes[route_id].route_color, time=update.departure.time)
-                # use dictionary of DepartureResponse class for api response
-                trips_per_stop[update.stop_id].append(trip.__dict__)
+                try:
+                    trip = DepartureResponse(stop_id=stop_id, stop_name=bus_stops[stop_id].stop_name,
+                                             route_id=route_id, route_short_name=bus_routes[route_id].route_short_name,
+                                             trip_headsign=bus_trips[trip_id].trip_headsign,
+                                             route_color=bus_routes[route_id].route_color, time=update.departure.time)
+                    # use dictionary of DepartureResponse class for api response
+                    trips_per_stop[update.stop_id].append(trip.__dict__)
+                except:
+                    # TODO: on error, update static data or ignore certain error
+                    continue
 
     return trips_per_stop
 
