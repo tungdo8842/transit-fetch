@@ -40,6 +40,12 @@ class BusTrip():
         self.direction_id = direction_id
 
 
+class BusStopResponse():
+    def __init__(self, stop_id, stop_name):
+        self.stop_id = stop_id
+        self.stop_name = stop_name
+
+
 class DepartureResponse():
     def __init__(self, stop_id, stop_name, route_id, route_short_name, trip_headsign, route_color, time):
         self.stop_id = stop_id
@@ -49,6 +55,7 @@ class DepartureResponse():
         self.trip_headsign = trip_headsign
         self.route_color = route_color
         self.time = time
+
 
 
 # read static data
@@ -78,10 +85,18 @@ with open("./static_data/trips.txt", encoding="utf-8-sig") as file:
                 trip["shape_id"], trip["block_id"], trip["direction_id"])
         bus_trips[new_bus_trip.trip_id] = new_bus_trip
 
+
+# reduce stops to id and name
+stops_name_id = []
+for stop_key in bus_stops:
+    stops_name_id.append([bus_stops[stop_key].stop_id, bus_stops[stop_key].stop_name])
+stops_name_id.sort(key=lambda l: l[1])
+
+
 # Feed data processing
 def get_trips_at_stops(feed):
     """sort all trips into a stop dictionary"""
-    trips_per_stop = defaultdict(list)
+    trips_by_stop_id = defaultdict(list)
 
     for entity in feed.entity:
         if entity.HasField("trip_update") and entity.trip_update.stop_time_update: # length != 0
@@ -100,18 +115,18 @@ def get_trips_at_stops(feed):
                                              trip_headsign=bus_trips[trip_id].trip_headsign,
                                              route_color=bus_routes[route_id].route_color, time=update.departure.time)
                     # use dictionary of DepartureResponse class for api response
-                    trips_per_stop[update.stop_id].append(trip.__dict__)
+                    trips_by_stop_id[update.stop_id].append(trip.__dict__)
                 except:
                     # TODO: on error, update static data or ignore certain error
                     continue
 
-    return trips_per_stop
+    return trips_by_stop_id
 
 
-def get_uvic_bus(uvic_bay_list, trips_per_stop):
+def get_uvic_bus(uvic_bay_list, trips_by_stop_id):
     uvic_trips = []
     for stop_name in uvic_bay_list:
-        uvic_trips.extend(trips_per_stop[uvic_bay_list[stop_name]])
+        uvic_trips.extend(trips_by_stop_id[uvic_bay_list[stop_name]])
 
     uvic_trips.sort(key=lambda d: d["time"])
 
@@ -120,21 +135,25 @@ def get_uvic_bus(uvic_bay_list, trips_per_stop):
 
 # Periodically updating data
 async def update_feed_data(app):
-    while True:
-        # GTFS Feed requests
-        try:
-            response = requests.get("https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48")
-            app.state.feed.ParseFromString(response.content)
-        except:
-            await asyncio.sleep(10)
-            continue
+    try:
+        while True:
+            # GTFS Feed requests
+            try:
+                response = requests.get("https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48")
+                app.state.feed.ParseFromString(response.content)
+            except:
+                await asyncio.sleep(10)
+                continue
 
-        # put all trips into their associated stop
-        app.state.trips_per_stop = get_trips_at_stops(app.state.feed)
-        # # A:4/9, B:14, C:15, G:7, M:39, R:26 (incomplete list)
-        app.state.uvic_bay_list = {"A": "101076", "B": "102416", "C": "102417", "G": "100405","M": "100741", "R": "100904"}
-        app.state.uvic_trips = get_uvic_bus(app.state.uvic_bay_list, app.state.trips_per_stop)
-        await asyncio.sleep(60)
+            # put all trips into their associated stop
+            app.state.trips_by_stop_id = get_trips_at_stops(app.state.feed)
+            # # A:4/9, B:14, C:15, G:7, M:39, R:26 (incomplete list)
+            app.state.uvic_bay_list = {"A": "101076", "B": "102416", "C": "102417", "G": "100405","M": "100741", "R": "100904"}
+            app.state.uvic_trips = get_uvic_bus(app.state.uvic_bay_list, app.state.trips_by_stop_id)
+            await asyncio.sleep(60)
+    except asyncio.CancelledError:
+        print("Feed Data Updater Stopped")
+        raise
 
 
 @asynccontextmanager
@@ -167,3 +186,13 @@ app.add_middleware(
 @app.get("/bus/uvic-departures")
 async def uvic_departures():
     return app.state.uvic_trips
+
+
+@app.get("/bus/vic/stops")
+async def vic_stop_departures(stop_id):
+    return sorted(app.state.trips_by_stop_id[stop_id], key=lambda d: d["time"])
+
+
+@app.get("/bus/vic/all_stops")
+async def all_vic_stops():
+    return stops_name_id
