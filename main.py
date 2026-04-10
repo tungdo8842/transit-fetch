@@ -135,11 +135,15 @@ def get_uvic_bus(uvic_bay_list, trips_by_stop_id):
 
 # Periodically updating data
 async def update_feed_data(app):
+    # A:4/9, B:14, C:15, G:7, M:39, R:26 (incomplete list)
+    app.state.uvic_bay_list = {"A": "101076", "B": "102416", "C": "102417", "G": "100405", "H": "100507", "L": "100858",
+                               "M": "100741", "N": "100705", "P": "100878", "Q": "100889", "R": "100904",}
     try:
         while True:
             # GTFS Feed requests
             try:
                 response = requests.get("https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48")
+                app.state.feed = gtfs_realtime_pb2.FeedMessage()
                 app.state.feed.ParseFromString(response.content)
             except:
                 await asyncio.sleep(10)
@@ -147,9 +151,8 @@ async def update_feed_data(app):
 
             # put all trips into their associated stop
             app.state.trips_by_stop_id = get_trips_at_stops(app.state.feed)
-            # # A:4/9, B:14, C:15, G:7, M:39, R:26 (incomplete list)
-            app.state.uvic_bay_list = {"A": "101076", "B": "102416", "C": "102417", "G": "100405","M": "100741", "R": "100904"}
             app.state.uvic_trips = get_uvic_bus(app.state.uvic_bay_list, app.state.trips_by_stop_id)
+
             await asyncio.sleep(60)
     except asyncio.CancelledError:
         print("Feed Data Updater Stopped")
@@ -158,7 +161,6 @@ async def update_feed_data(app):
 
 @asynccontextmanager
 async def lifespan(app):
-    app.state.feed = gtfs_realtime_pb2.FeedMessage()
     asyncio.create_task(update_feed_data(app))
     yield
 
